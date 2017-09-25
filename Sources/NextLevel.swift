@@ -622,15 +622,12 @@ public class NextLevel: NSObject {
                 else {
                     return
             }
-            
-            self.executeClosureAsyncOnSessionQueueIfNecessary {
-                self.configureSession()
-                self.configureSessionDevices()
-                self.updateVideoOrientation()
-                
-                if self.captureMode == .arKit {
-                    self.setupContextIfNecessary()
-                }
+            self.configureSession()
+            self.configureSessionDevices()
+            self.updateVideoOrientation()
+          
+            if self.captureMode == .arKit {
+              self.setupContextIfNecessary()
             }
         }
     }
@@ -638,10 +635,8 @@ public class NextLevel: NSObject {
     /// The current device position.
     public var devicePosition: NextLevelDevicePosition = .back {
         didSet {
-            self.executeClosureAsyncOnSessionQueueIfNecessary {
-                self.configureSessionDevices()
-                self.updateVideoOrientation()
-            }
+            self.configureSessionDevices()
+            self.updateVideoOrientation()
         }
     }
     
@@ -664,11 +659,9 @@ public class NextLevel: NSObject {
     /// Video stabilization mode
     public var videoStabilizationMode: NextLevelVideoStabilizationMode = .auto {
         didSet {
-            self.executeClosureAsyncOnSessionQueueIfNecessary {
-                self.beginConfiguration()
-                self.updateVideoOutputSettings()
-                self.commitConfiguration()
-            }
+            self.beginConfiguration()
+            self.updateVideoOutputSettings()
+            self.commitConfiguration()
         }
     }
     
@@ -887,20 +880,18 @@ extension NextLevel {
     /// Stops the current recording session.
     public func stop() {
         if let session = self._captureSession {
-            self.executeClosureAsyncOnSessionQueueIfNecessary {
-                if session.isRunning == true {
-                    session.stopRunning()
-                }
-                
-                self.beginConfiguration()
-                self.removeInputs(session: session)
-                self.removeOutputs(session: session)
-                self.commitConfiguration()
-                
-                self._recordingSession = nil
-                self._captureSession = nil
-                self._currentDevice = nil
-            }
+          if session.isRunning == true {
+            session.stopRunning()
+          }
+          
+          self.beginConfiguration()
+          self.removeInputs(session: session)
+          self.removeOutputs(session: session)
+          self.commitConfiguration()
+          
+          self._recordingSession = nil
+          self._captureSession = nil
+          self._currentDevice = nil
         }
         
         if self.captureMode == .arKit {
@@ -947,7 +938,7 @@ extension NextLevel {
             }
         }
     }
-    
+  
     @available(iOS 11.0, *)
     internal func setupARSession() {
         self.executeClosureAsyncOnSessionQueueIfNecessary {
@@ -959,7 +950,6 @@ extension NextLevel {
                 // setup NL recording session
                 self._recordingSession = NextLevelSession(queue: self._sessionQueue, queueKey: NextLevelCaptureSessionSpecificKey)
                 self.arConfiguration?.session?.delegateQueue = self._sessionQueue
-                
                 if let session = self._captureSession {
                     session.automaticallyConfiguresApplicationAudioSession = self.automaticallyConfiguresApplicationAudioSession
                     
@@ -2034,6 +2024,9 @@ extension NextLevel {
                             self.deviceDelegate?.nextLevel(self, didChangeDeviceFormat: format)
                         }
                     } catch {
+                        self.executeClosureAsyncOnMainQueueIfNecessary {
+                            
+                        }
                         print("NextLevel, active device format failed to lock device for configuration")
                     }
                 } else {
@@ -2064,11 +2057,9 @@ extension NextLevel {
         if deviceForUse == nil {
             throw NextLevelError.deviceNotAvailable
         } else {
-            self.executeClosureAsyncOnSessionQueueIfNecessary {
-                self._requestedDevice = deviceForUse
-                self.configureSessionDevices()
-                self.updateVideoOrientation()
-            }
+            self._requestedDevice = deviceForUse
+            self.configureSessionDevices()
+            self.updateVideoOrientation()
         }
     }
     
@@ -2171,102 +2162,97 @@ extension NextLevel {
     
     /// Triggers a photo capture from the last video frame.
     public func capturePhotoFromVideo() {
+      guard self._recordingSession != nil
+        else {
+          return
+      }
+      
+      var buffer: CVPixelBuffer? = nil
+      if let videoFrame = self._lastVideoFrame,
+        let imageBuffer = CMSampleBufferGetImageBuffer(videoFrame) {
+        buffer = imageBuffer
+      } else if let arFrame = self._lastARFrame {
+        buffer = arFrame
+      }
+      
+      if self.isVideoCustomContextRenderingEnabled {
+        if let buffer = buffer {
+          if CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags(rawValue: 0)) == kCVReturnSuccess {
+            // only called from captureQueue, populates self._sessionVideoCustomContextImageBuffer
+            self.videoDelegate?.nextLevel(self, renderToCustomContextWithImageBuffer: buffer, onQueue: self._sessionQueue)
+            CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags(rawValue: 0))
+          }
+        }
+      }
+      
+      // create a render context
+      
+      self.setupContextIfNecessary()
+      
+      var photoDict: [String: Any]? = nil
+      if let customFrame = self._sessionVideoCustomContextImageBuffer {
         
-        self.executeClosureAsyncOnSessionQueueIfNecessary {
-            guard self._recordingSession != nil
-            else {
-                return
-            }
-            
-            var buffer: CVPixelBuffer? = nil
-            if let videoFrame = self._lastVideoFrame,
-                let imageBuffer = CMSampleBufferGetImageBuffer(videoFrame) {
-                buffer = imageBuffer
-            } else if let arFrame = self._lastARFrame {
-                buffer = arFrame
-            }
-
-            if self.isVideoCustomContextRenderingEnabled {
-                if let buffer = buffer {
-                    if CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags(rawValue: 0)) == kCVReturnSuccess {
-                        // only called from captureQueue, populates self._sessionVideoCustomContextImageBuffer
-                        self.videoDelegate?.nextLevel(self, renderToCustomContextWithImageBuffer: buffer, onQueue: self._sessionQueue)
-                        CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags(rawValue: 0))
-                    }
-                }
-            }
-            
-            // create a render context
-            
-            self.setupContextIfNecessary()
-            
-            var photoDict: [String: Any]? = nil
-            if let customFrame = self._sessionVideoCustomContextImageBuffer {
-                
-                // TODO append exif metadata
-                
-                // add JPEG, thumbnail
-                if let context = self._ciContext,
-                    let photo = context.uiimage(withPixelBuffer: customFrame),
-                    let imageData = UIImageJPEGRepresentation(photo, 1) {
-                    
-                    if photoDict == nil {
-                        photoDict = [:]
-                    }
-                    photoDict?[NextLevelPhotoJPEGKey] = imageData
-                }
-                
-            } else if let videoFrame = self._lastVideoFrame {
-                
-                // append exif metadata
-                videoFrame.append(metadataAdditions: NextLevel.tiffMetadata())
-                if let metadata = videoFrame.metadata() {
-                    if photoDict == nil {
-                        photoDict = [:]
-                    }
-                    photoDict?[NextLevelPhotoMetadataKey] = metadata
-                }
-                
-                // add JPEG, thumbnail
-                if let context = self._ciContext,
-                    let photo = context.uiimage(withSampleBuffer: videoFrame),
-                    let imageData = UIImageJPEGRepresentation(photo, 1) {
-                    
-                    if photoDict == nil {
-                        photoDict = [:]
-                    }
-                    photoDict?[NextLevelPhotoJPEGKey] = imageData
-                }
-                
-            } else if let arFrame = self._lastARFrame {
-                
-                // TODO append exif metadata
-                
-                // add JPEG, thumbnail
-                if let context = self._ciContext,
-                    let photo = context.uiimage(withPixelBuffer: arFrame),
-                    let imageData = UIImageJPEGRepresentation(photo, 1) {
-                    
-                    if photoDict == nil {
-                        photoDict = [:]
-                    }
-                    photoDict?[NextLevelPhotoJPEGKey] = imageData
-                }
-            }
-            
-            // TODO, if photoDict?[NextLevelPhotoJPEGKey]
-            // add explicit thumbnail
-            //let thumbnailData = AVCapturePhotoOutput.jpegPhotoDataRepresentation(forJPEGSampleBuffer: previewBuffer, previewPhotoSampleBuffer: nil)
-            //if let tData = thumbnailData {
-            //    photoDict[NextLevelPhotoThumbnailKey] = tData
-            //}
-            
-            self.executeClosureSyncOnMainQueue {
-                self.videoDelegate?.nextLevel(self, didCompletePhotoCaptureFromVideoFrame: photoDict)
-            }
-            
+        // TODO append exif metadata
+        
+        // add JPEG, thumbnail
+        if let context = self._ciContext,
+          let photo = context.uiimage(withPixelBuffer: customFrame),
+          let imageData = UIImageJPEGRepresentation(photo, 1) {
+          
+          if photoDict == nil {
+            photoDict = [:]
+          }
+          photoDict?[NextLevelPhotoJPEGKey] = imageData
         }
         
+      } else if let videoFrame = self._lastVideoFrame {
+        
+        // append exif metadata
+        videoFrame.append(metadataAdditions: NextLevel.tiffMetadata())
+        if let metadata = videoFrame.metadata() {
+          if photoDict == nil {
+            photoDict = [:]
+          }
+          photoDict?[NextLevelPhotoMetadataKey] = metadata
+        }
+        
+        // add JPEG, thumbnail
+        if let context = self._ciContext,
+          let photo = context.uiimage(withSampleBuffer: videoFrame),
+          let imageData = UIImageJPEGRepresentation(photo, 1) {
+          
+          if photoDict == nil {
+            photoDict = [:]
+          }
+          photoDict?[NextLevelPhotoJPEGKey] = imageData
+        }
+        
+      } else if let arFrame = self._lastARFrame {
+        
+        // TODO append exif metadata
+        
+        // add JPEG, thumbnail
+        if let context = self._ciContext,
+          let photo = context.uiimage(withPixelBuffer: arFrame),
+          let imageData = UIImageJPEGRepresentation(photo, 1) {
+          
+          if photoDict == nil {
+            photoDict = [:]
+          }
+          photoDict?[NextLevelPhotoJPEGKey] = imageData
+        }
+      }
+      
+      // TODO, if photoDict?[NextLevelPhotoJPEGKey]
+      // add explicit thumbnail
+      //let thumbnailData = AVCapturePhotoOutput.jpegPhotoDataRepresentation(forJPEGSampleBuffer: previewBuffer, previewPhotoSampleBuffer: nil)
+      //if let tData = thumbnailData {
+      //    photoDict[NextLevelPhotoThumbnailKey] = tData
+      //}
+      
+      self.executeClosureSyncOnMainQueue {
+        self.videoDelegate?.nextLevel(self, didCompletePhotoCaptureFromVideoFrame: photoDict)
+      }
     }
     
     // custom video rendering
@@ -2845,13 +2831,11 @@ extension NextLevel {
     @objc internal func handleApplicationWillEnterForeground(_ notification: Notification) {
         //self.sessionQueue.async {}
     }
-    
+  
     @objc internal func handleApplicationDidEnterBackground(_ notification: Notification) {
-        self.executeClosureAsyncOnSessionQueueIfNecessary {
-            if self.isRecording {
-                self.pause()
-            }
-        }
+      if self.isRecording {
+        self.pause()
+      }
     }
     
     // session
@@ -2886,22 +2870,20 @@ extension NextLevel {
             self.delegate?.nextLevelSessionDidStop(self)
         }
     }
-    
+  
     @objc internal func handleSessionRuntimeError(_ notification: Notification) {
-        self.executeClosureAsyncOnSessionQueueIfNecessary {
-            if let error = notification.userInfo?[AVCaptureSessionErrorKey] as? AVError {
-                switch error.code {
-                case .deviceIsNotAvailableInBackground:
-                    print("NextLevel, error, media services are not available in the background")
-                    break
-                case .mediaServicesWereReset:
-                    fallthrough
-                default:
-                    // TODO reset capture
-                    break
-                }
-            }
+      if let error = notification.userInfo?[AVCaptureSessionErrorKey] as? AVError {
+        switch error.code {
+        case .deviceIsNotAvailableInBackground:
+          print("NextLevel, error, media services are not available in the background")
+          break
+        case .mediaServicesWereReset:
+          fallthrough
+        default:
+          // TODO reset capture
+          break
         }
+      }
     }
     
     @objc public func handleSessionWasInterrupted(_ notification: Notification) {
