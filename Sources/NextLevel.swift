@@ -530,6 +530,9 @@ public protocol NextLevelVideoDelegate: NSObjectProtocol {
     func nextLevel(_ nextLevel: NextLevel, didAppendVideoSampleBuffer sampleBuffer: CMSampleBuffer, inSession session: NextLevelSession)
     func nextLevel(_ nextLevel: NextLevel, didSkipVideoSampleBuffer sampleBuffer: CMSampleBuffer, inSession session: NextLevelSession)
 
+    func nextLevel(_ nextLevel: NextLevel, didAppendVideoPixelBuffer pixelBuffer: CVPixelBuffer, timestamp: TimeInterval, inSession session: NextLevelSession)
+    func nextLevel(_ nextLevel: NextLevel, didSkipVideoPixelBuffer pixelBuffer: CVPixelBuffer, timestamp: TimeInterval, inSession session: NextLevelSession)
+    
     func nextLevel(_ nextLevel: NextLevel, didAppendAudioSampleBuffer sampleBuffer: CMSampleBuffer, inSession session: NextLevelSession)
     func nextLevel(_ nextLevel: NextLevel, didSkipAudioSampleBuffer sampleBuffer: CMSampleBuffer, inSession session: NextLevelSession)
 
@@ -934,6 +937,8 @@ extension NextLevel {
                     self.delegate?.nextLevelSessionWillStart(self)
                     session.startRunning()
                     self.previewDelegate?.nextLevelWillStartPreview(self)
+                    
+                    // nextLevelSessionDidStart is called from AVFoundation
                 }
             }
         }
@@ -964,6 +969,10 @@ extension NextLevel {
                     self.delegate?.nextLevelSessionWillStart(self)
                     self.arConfiguration?.session?.run(config, options: options)
                     self._arRunning = true
+                    
+                    self.executeClosureAsyncOnMainQueueIfNecessary {
+                        self.delegate?.nextLevelSessionDidStart(self)
+                    }
                 }
             }
         }
@@ -2501,12 +2510,12 @@ extension NextLevel {
                 self._lastVideoFrameTimeInterval = CACurrentMediaTime()
                 if success == true {
                     self.executeClosureAsyncOnMainQueueIfNecessary {
-//                        self.videoDelegate?.nextLevel(self, didAppendVideoPixelBuffer: pixelBuffer, inSession: session)
+                        self.videoDelegate?.nextLevel(self, didAppendVideoPixelBuffer: pixelBuffer, timestamp: timestamp, inSession: session)
                     }
                     self.checkSessionDuration()
                 } else {
                     self.executeClosureAsyncOnMainQueueIfNecessary {
-//                        self.videoDelegate?.nextLevel(self, didSkipVideoPixelBuffer: pixelBuffer, inSession: session)
+                        self.videoDelegate?.nextLevel(self, didSkipVideoPixelBuffer: pixelBuffer, timestamp: timestamp, inSession: session)
                     }
                 }
             })
