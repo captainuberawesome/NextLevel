@@ -102,7 +102,11 @@ public enum NextLevelDeviceType: Int, CustomStringConvertible {
         case .wideAngleCamera:
             return AVCaptureDevice.DeviceType.builtInWideAngleCamera
         case .duoCamera:
-            return AVCaptureDevice.DeviceType.builtInDuoCamera
+            if #available(iOS 11.0, *) {
+                return AVCaptureDevice.DeviceType.builtInDualCamera
+            } else {
+                return AVCaptureDevice.DeviceType.builtInDuoCamera
+            }
         }
     }
     
@@ -1513,20 +1517,22 @@ extension NextLevel {
             return .locked
         }
         set {
-            if let device: AVCaptureDevice = self._currentDevice {
-                guard
-                    device.focusMode != newValue.avfoundationType,
-                    device.isFocusModeSupported(newValue.avfoundationType)
-                    else {
-                        return
-                }
-                
-                do {
-                    try device.lockForConfiguration()
-                    device.focusMode = newValue.avfoundationType
-                    device.unlockForConfiguration()
-                } catch {
-                    print("NextLevel, focusMode failed to lock device for configuration")
+            self.executeClosureAsyncOnSessionQueueIfNecessary {
+                if let device: AVCaptureDevice = self._currentDevice {
+                    guard
+                        device.focusMode != newValue.avfoundationType,
+                        device.isFocusModeSupported(newValue.avfoundationType)
+                        else {
+                            return
+                    }
+                    
+                    do {
+                        try device.lockForConfiguration()
+                        device.focusMode = newValue.avfoundationType
+                        device.unlockForConfiguration()
+                    } catch {
+                        print("NextLevel, focusMode failed to lock device for configuration")
+                    }
                 }
             }
         }
@@ -1959,25 +1965,26 @@ extension NextLevel {
             return frameRate
         }
         set {
-            if let device: AVCaptureDevice = self._currentDevice {
-                guard device.activeFormat.isSupported(withFrameRate: newValue)
-                else {
-                    print("unsupported frame rate for current device format config, \(newValue) fps")
-                    return
-                }
-                
-                let fps: CMTime = CMTimeMake(1, newValue)
-                do {
-                    try device.lockForConfiguration()
+            self.executeClosureAsyncOnSessionQueueIfNecessary {
+                if let device: AVCaptureDevice = self._currentDevice {
+                    guard device.activeFormat.isSupported(withFrameRate: newValue)
+                        else {
+                            print("unsupported frame rate for current device format config, \(newValue) fps")
+                            return
+                    }
                     
-                    device.activeVideoMaxFrameDuration = fps
-                    device.activeVideoMinFrameDuration = fps
-                    
-                    device.unlockForConfiguration()
-                } catch {
-                    print("NextLevel, frame rate failed to lock device for configuration")
+                    let fps: CMTime = CMTimeMake(1, newValue)
+                    do {
+                        try device.lockForConfiguration()
+                        
+                        device.activeVideoMaxFrameDuration = fps
+                        device.activeVideoMinFrameDuration = fps
+                        
+                        device.unlockForConfiguration()
+                    } catch {
+                        print("NextLevel, frame rate failed to lock device for configuration")
+                    }
                 }
-                
             }
         }
     }
@@ -2126,7 +2133,13 @@ extension NextLevel {
     /// Checks if video capture is supported by the hardware.
     public var supportsVideoCapture: Bool {
         get {
-            let deviceTypes: [AVCaptureDevice.DeviceType] = [AVCaptureDevice.DeviceType.builtInWideAngleCamera, AVCaptureDevice.DeviceType.builtInTelephotoCamera, AVCaptureDevice.DeviceType.builtInDuoCamera]
+            var deviceTypes: [AVCaptureDevice.DeviceType] = [AVCaptureDevice.DeviceType.builtInWideAngleCamera, AVCaptureDevice.DeviceType.builtInTelephotoCamera]
+            if #available(iOS 11.0, *) {
+                deviceTypes.append(.builtInDualCamera)
+            } else {
+                deviceTypes.append(.builtInDuoCamera)
+            }
+            
             let discoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: deviceTypes, mediaType: AVMediaType.video, position: .unspecified)
             return discoverySession.devices.count > 0
         }
@@ -2150,23 +2163,27 @@ extension NextLevel {
             return 1.0 // prefer 1.0 instead of using an optional
         }
         set {
-            if let device = self._currentDevice {
-                do {
-                    try device.lockForConfiguration()
-                    
-                    let zoom: Float = max(1, min(newValue, Float(device.activeFormat.videoMaxZoomFactor)))
-                    device.videoZoomFactor = CGFloat(zoom)
-                    
-                    device.unlockForConfiguration()
-                } catch {
-                    print("NextLevel, zoomFactor failed to lock device for configuration")
+            self.executeClosureAsyncOnSessionQueueIfNecessary {
+                if let device = self._currentDevice {
+                    do {
+                        try device.lockForConfiguration()
+                        
+                        let zoom: Float = max(1, min(newValue, Float(device.activeFormat.videoMaxZoomFactor)))
+                        device.videoZoomFactor = CGFloat(zoom)
+                        
+                        device.unlockForConfiguration()
+                    } catch {
+                        print("NextLevel, zoomFactor failed to lock device for configuration")
+                    }
                 }
             }
         }
     }
     
     internal func videoZoomFactorChanged() {
-        self.videoDelegate?.nextLevel(self, didUpdateVideoZoomFactor: self.videoZoomFactor)
+        self.executeClosureAsyncOnMainQueueIfNecessary {
+            self.videoDelegate?.nextLevel(self, didUpdateVideoZoomFactor: self.videoZoomFactor)
+        }
     }
     
     /// Triggers a photo capture from the last video frame.
