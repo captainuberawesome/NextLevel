@@ -30,7 +30,6 @@ import CoreImage
 import CoreVideo
 import ImageIO
 import Metal
-import ARKit
 
 // MARK: - types
 
@@ -131,7 +130,6 @@ public enum NextLevelCaptureMode: Int, CustomStringConvertible {
     case photo
     case audio
     case videoWithoutAudio
-    case arKit
     
     public var description: String {
         get {
@@ -144,8 +142,6 @@ public enum NextLevelCaptureMode: Int, CustomStringConvertible {
                 return "Photo"
             case .audio:
                 return "Audio"
-            case .arKit:
-                return "ARKit"
             }
         }
     }
@@ -518,10 +514,6 @@ public protocol NextLevelVideoDelegate: NSObjectProtocol {
     func nextLevel(_ nextLevel: NextLevel, willProcessRawVideoSampleBuffer sampleBuffer: CMSampleBuffer, onQueue queue: DispatchQueue)
     func nextLevel(_ nextLevel: NextLevel, renderToCustomContextWithImageBuffer imageBuffer: CVPixelBuffer, onQueue queue: DispatchQueue)
 
-    // ARKit video processing
-    @available(iOS 11.0, *)
-    func nextLevel(_ nextLevel: NextLevel, willProcessFrame frame: AnyObject, pixelBuffer: CVPixelBuffer, timestamp: TimeInterval, onQueue queue: DispatchQueue)
-
     // video recording session
     func nextLevel(_ nextLevel: NextLevel, didSetupVideoInSession session: NextLevelSession)
     func nextLevel(_ nextLevel: NextLevel, didSetupAudioInSession session: NextLevelSession)
@@ -598,14 +590,6 @@ public class NextLevel: NSObject {
     /// Configuration for photos
     public var photoConfiguration: NextLevelPhotoConfiguration
     
-    @available(iOS 11.0, *)
-    /// Configuration property for augmented reality
-    public var arConfiguration: NextLevelARConfiguration? {
-        get {
-            return self._arConfiguration as? NextLevelARConfiguration
-        }
-    }
-    
     // audio configuration
     
     /// Indicates whether the capture session automatically changes settings in the app’s shared audio session. By default, is `true`.
@@ -632,10 +616,6 @@ public class NextLevel: NSObject {
             self.configureSession()
             self.configureSessionDevices()
             self.updateVideoOrientation()
-          
-            if self.captureMode == .arKit {
-              self.setupContextIfNecessary()
-            }
         }
     }
     
@@ -684,11 +664,6 @@ public class NextLevel: NSObject {
     /// Checks if the current capture session is running
     public var isRunning: Bool {
         get {
-            if #available(iOS 11.0, *) {
-                if self.captureMode == .arKit {
-                    return self._arRunning
-                }
-            }
             if let session = self._captureSession {
                 return session.isRunning
             }
@@ -739,13 +714,6 @@ public class NextLevel: NSObject {
     internal var _lastVideoFrame: CMSampleBuffer?
     internal var _lastAudioFrame: CMSampleBuffer?
     
-    // ARKit
-    
-    internal var _arRunning: Bool = false
-    internal var _arConfiguration: NextLevelConfiguration?
-    
-    internal var _lastARFrame: CVPixelBuffer?
-    
     // MARK: - singleton
     
     /// Method for providing a NextLevel singleton. This isn't required for use.
@@ -763,9 +731,6 @@ public class NextLevel: NSObject {
         self.videoConfiguration = NextLevelVideoConfiguration()
         self.audioConfiguration = NextLevelAudioConfiguration()
         self.photoConfiguration = NextLevelPhotoConfiguration()
-        if #available(iOS 11.0, *) {
-            self._arConfiguration = NextLevelARConfiguration()
-        }
         
         super.init()
         
@@ -845,8 +810,6 @@ extension NextLevel {
             return self.authorizationStatus(forMediaType: AVMediaType.audio)
         case .videoWithoutAudio:
             return self.authorizationStatus(forMediaType: AVMediaType.video)
-        case .arKit:
-            fallthrough
         case .video:
             let audioStatus = self.authorizationStatus(forMediaType: AVMediaType.audio)
             let videoStatus = self.authorizationStatus(forMediaType: AVMediaType.video)
@@ -874,14 +837,8 @@ extension NextLevel {
         else {
             throw NextLevelError.authorization
         }
-        
-        if self.captureMode == .arKit {
-            if #available(iOS 11.0, *) {
-                setupARSession()
-            }
-        } else {
-            setupAVSession()
-        }
+      
+        setupAVSession()
     }
     
     /// Stops the current recording session.
@@ -899,19 +856,6 @@ extension NextLevel {
           self._recordingSession = nil
           self._captureSession = nil
           self._currentDevice = nil
-        }
-        
-        if self.captureMode == .arKit {
-            if #available(iOS 11.0, *) {
-                self.executeClosureAsyncOnSessionQueueIfNecessary {
-                    if self._arRunning == true {
-                        self.arConfiguration?.session?.pause()
-                        self._arRunning = false
-                        
-                        self._recordingSession = nil
-                    }
-                }
-            }
         }
     }
     
@@ -941,36 +885,6 @@ extension NextLevel {
                     self.delegate?.nextLevelSessionWillStart(self)
                     session.startRunning()
                     self.previewDelegate?.nextLevelWillStartPreview(self)
-                }
-            }
-        }
-    }
-  
-    @available(iOS 11.0, *)
-    internal func setupARSession() {
-        self.executeClosureAsyncOnSessionQueueIfNecessary {
-            if let config = self.arConfiguration?.config,
-                let options = self.arConfiguration?.runOptions {
-                self._captureSession = AVCaptureSession() // AV session is needed for device management and configuration
-                self._sessionConfigurationCount = 0
-
-                // setup NL recording session
-                self._recordingSession = NextLevelSession(queue: self._sessionQueue, queueKey: NextLevelCaptureSessionSpecificKey)
-                self.arConfiguration?.session?.delegateQueue = self._sessionQueue
-                if let session = self._captureSession {
-                    session.automaticallyConfiguresApplicationAudioSession = self.automaticallyConfiguresApplicationAudioSession
-                    
-                    self.beginConfiguration()
-                    self.configureSession()
-                    self.configureSessionDevices()
-                    self.updateVideoOrientation()
-                    self.commitConfiguration()
-                }
-                
-                if self._arRunning == false {
-                    self.delegate?.nextLevelSessionWillStart(self)
-                    self.arConfiguration?.session?.run(config, options: options)
-                    self._arRunning = true
                 }
             }
         }
@@ -1022,9 +936,6 @@ extension NextLevel {
             shouldConfigureAudio = true
             break
         case .videoWithoutAudio:
-            shouldConfigureVideo = true
-            break
-        case .arKit:
             shouldConfigureVideo = true
             break
         }
@@ -1128,9 +1039,6 @@ extension NextLevel {
                 break
             case .audio:
                 let _ = self.addAudioOuput()
-                break
-            case .arKit:
-                // no AV inputs to setup
                 break
             }
             
@@ -1345,20 +1253,6 @@ extension NextLevel {
             if let videoOutput = self._videoOutput, session.outputs.contains(videoOutput) {
                 session.removeOutput(videoOutput)
                 self._videoOutput = nil
-            }
-            if let photoOutput = self._photoOutput, session.outputs.contains(photoOutput) {
-                session.removeOutput(photoOutput)
-                self._photoOutput = nil
-            }
-            break
-        case .arKit:
-            if let videoOutput = self._videoOutput, session.outputs.contains(videoOutput) {
-                session.removeOutput(videoOutput)
-                self._videoOutput = nil
-            }
-            if let audioOutput = self._audioOutput, session.outputs.contains(audioOutput) {
-                session.removeOutput(audioOutput)
-                self._audioOutput = nil
             }
             if let photoOutput = self._photoOutput, session.outputs.contains(photoOutput) {
                 session.removeOutput(photoOutput)
@@ -2191,8 +2085,6 @@ extension NextLevel {
       if let videoFrame = self._lastVideoFrame,
         let imageBuffer = CMSampleBufferGetImageBuffer(videoFrame) {
         buffer = imageBuffer
-      } else if let arFrame = self._lastARFrame {
-        buffer = arFrame
       }
       
       if self.isVideoCustomContextRenderingEnabled {
@@ -2247,20 +2139,6 @@ extension NextLevel {
           photoDict?[NextLevelPhotoJPEGKey] = imageData
         }
         
-      } else if let arFrame = self._lastARFrame {
-        
-        // TODO append exif metadata
-        
-        // add JPEG, thumbnail
-        if let context = self._ciContext,
-          let photo = context.uiimage(withPixelBuffer: arFrame),
-          let imageData = UIImageJPEGRepresentation(photo, 1) {
-          
-          if photoDict == nil {
-            photoDict = [:]
-          }
-          photoDict?[NextLevelPhotoJPEGKey] = imageData
-        }
       }
       
       // TODO, if photoDict?[NextLevelPhotoJPEGKey]
@@ -2769,39 +2647,6 @@ extension NextLevel: AVCapturePhotoCaptureDelegate {
     public func photoOutput(_ captureOutput: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
         self.executeClosureAsyncOnMainQueueIfNecessary {
             self.photoDelegate?.nextLevelDidCompletePhotoCapture(self)
-        }
-    }
-    
-}
-
-// MARK: - ARSession
-
-@available(iOS 11.0, *)
-extension NextLevel {
-   
-    public func arSession(_ session: ARSession, didUpdate frame: ARFrame) {
-        var pixelBuffer = frame.capturedImage
-        let timestamp = frame.timestamp
-
-        // TODO: support orientation changes, maybe use snapshot API instead
-        self.setupPixelBufferPoolIfNecessary(pixelBuffer)
-        if let pixelBufferPool = self._pixelBufferPool,
-            let adjustedPixelBuffer = self._ciContext?.createPixelBuffer(fromPixelBuffer: pixelBuffer, withOrientation: .right, pixelBufferPool: pixelBufferPool) {
-            pixelBuffer = adjustedPixelBuffer
-        
-            self.videoDelegate?.nextLevel(self, willProcessFrame: frame, pixelBuffer: pixelBuffer, timestamp: timestamp, onQueue: self._sessionQueue)
-            self._lastARFrame = pixelBuffer
-            
-            if let session = self._recordingSession {
-                self.handleVideoOutput(pixelBuffer: pixelBuffer, timestamp: timestamp, session: session)
-            }
-        }
-    }
-    
-    public func arSession(_ session: ARSession, didOutputAudioSampleBuffer audioSampleBuffer: CMSampleBuffer) {
-        self._lastAudioFrame = audioSampleBuffer
-        if let session = self._recordingSession {
-            self.handleAudioOutput(sampleBuffer: audioSampleBuffer, session: session)
         }
     }
     
